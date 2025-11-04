@@ -34,7 +34,7 @@ $header = '<link rel="stylesheet" href="' . Typecho_Common::url('normalize.css?v
         <meta name="robots" content="noindex, nofollow">
         <?php echo $header; ?>
     </head>
-    <body<?php if (isset($bodyClass)) {echo ' class="' . $bodyClass . '"';} ?>>
+    <body<?php if (isset($bodyClass)) {echo ' class="' . htmlspecialchars($bodyClass, ENT_QUOTES, 'UTF-8') . '"';} ?>>
     <!--[if lt IE 9]>
         <div class="message error browsehappy" role="dialog"><?php _e('当前网页 <strong>不支持</strong> 你正在使用的浏览器. 为了正常的访问, 请 <a href="https://www.microsoft.com/zh-cn/edge">升级你的浏览器</a>'); ?>.</div>
     <![endif]-->

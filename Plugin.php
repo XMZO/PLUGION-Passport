@@ -172,7 +172,7 @@ class Passport_Plugin implements Typecho_Plugin_Interface
             echo '<p style="color: red;">风险日志加载失败：' . htmlspecialchars($e->getMessage()) . '</p>';
             error_log('Passport config risk log failed: ' . $e->getMessage());
         }
-
+      
         // 动态JS：验证码切换
         echo self::getCaptchaToggleJs();
     }
