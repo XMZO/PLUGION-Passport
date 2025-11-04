@@ -341,6 +341,7 @@ JS;
      *
      * 表结构：token (主键), uid, created_at, used。
      * 索引：uid, created_at。
+     * 兼容 MySQL 和 SQLite。
      *
      * @return void
      */
@@ -349,15 +350,33 @@ JS;
         $db = Typecho_Db::get();
         $prefix = $db->getPrefix();
         $table = $prefix . 'password_reset_tokens';
-        $db->query("CREATE TABLE IF NOT EXISTS `{$table}` (
-            `token` VARCHAR(64) NOT NULL,
-            `uid` INT(10) UNSIGNED NOT NULL,
-            `created_at` INT(10) UNSIGNED NOT NULL,
-            `used` TINYINT(1) DEFAULT 0,
-            PRIMARY KEY (`token`),
-            INDEX `uid` (`uid`),
-            INDEX `created_at` (`created_at`)
-        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4");
+        $adapterName = $db->getAdapterName();
+
+        // 根据数据库类型使用不同的 SQL
+        if (strpos($adapterName, 'Mysql') !== false || strpos($adapterName, 'Pdo_Mysql') !== false) {
+            // MySQL 语法
+            $db->query("CREATE TABLE IF NOT EXISTS `{$table}` (
+                `token` VARCHAR(64) NOT NULL,
+                `uid` INT(10) UNSIGNED NOT NULL,
+                `created_at` INT(10) UNSIGNED NOT NULL,
+                `used` TINYINT(1) DEFAULT 0,
+                PRIMARY KEY (`token`),
+                INDEX `uid` (`uid`),
+                INDEX `created_at` (`created_at`)
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4");
+        } else {
+            // SQLite 语法（不支持 UNSIGNED 和 ENGINE）
+            $db->query("CREATE TABLE IF NOT EXISTS `{$table}` (
+                `token` VARCHAR(64) NOT NULL,
+                `uid` INTEGER NOT NULL,
+                `created_at` INTEGER NOT NULL,
+                `used` INTEGER DEFAULT 0,
+                PRIMARY KEY (`token`)
+            )");
+            // SQLite 单独创建索引
+            $db->query("CREATE INDEX IF NOT EXISTS `idx_uid` ON `{$table}` (`uid`)");
+            $db->query("CREATE INDEX IF NOT EXISTS `idx_created_at` ON `{$table}` (`created_at`)");
+        }
     }
 
     /**
@@ -365,6 +384,7 @@ JS;
      *
      * 表结构：ip (主键), attempts, last_attempt, locked_until。
      * 索引：locked_until。
+     * 兼容 MySQL 和 SQLite。
      *
      * @return void
      */
@@ -373,14 +393,31 @@ JS;
         $db = Typecho_Db::get();
         $prefix = $db->getPrefix();
         $table = $prefix . 'passport_fails';
-        $db->query("CREATE TABLE IF NOT EXISTS `{$table}` (
-            `ip` VARCHAR(45) NOT NULL,
-            `attempts` INT(10) UNSIGNED NOT NULL DEFAULT 0,
-            `last_attempt` INT(10) UNSIGNED NOT NULL,
-            `locked_until` INT(10) UNSIGNED NOT NULL DEFAULT 0,
-            PRIMARY KEY (`ip`),
-            INDEX `locked_until` (`locked_until`)
-        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4");
+        $adapterName = $db->getAdapterName();
+
+        // 根据数据库类型使用不同的 SQL
+        if (strpos($adapterName, 'Mysql') !== false || strpos($adapterName, 'Pdo_Mysql') !== false) {
+            // MySQL 语法
+            $db->query("CREATE TABLE IF NOT EXISTS `{$table}` (
+                `ip` VARCHAR(45) NOT NULL,
+                `attempts` INT(10) UNSIGNED NOT NULL DEFAULT 0,
+                `last_attempt` INT(10) UNSIGNED NOT NULL,
+                `locked_until` INT(10) UNSIGNED NOT NULL DEFAULT 0,
+                PRIMARY KEY (`ip`),
+                INDEX `locked_until` (`locked_until`)
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4");
+        } else {
+            // SQLite 语法（不支持 UNSIGNED 和 ENGINE）
+            $db->query("CREATE TABLE IF NOT EXISTS `{$table}` (
+                `ip` VARCHAR(45) NOT NULL,
+                `attempts` INTEGER NOT NULL DEFAULT 0,
+                `last_attempt` INTEGER NOT NULL,
+                `locked_until` INTEGER NOT NULL DEFAULT 0,
+                PRIMARY KEY (`ip`)
+            )");
+            // SQLite 单独创建索引
+            $db->query("CREATE INDEX IF NOT EXISTS `idx_locked_until` ON `{$table}` (`locked_until`)");
+        }
     }
 
     /**
