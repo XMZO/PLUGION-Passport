@@ -213,7 +213,20 @@ private function _setNotice($message, $type)
                 // [安全] 防范用户枚举漏洞
                 // 无论邮箱是否存在，都假装已发送邮件。实际只在用户存在时发送。
                 if (!empty($user)) {
-                    $token = Typecho_Common::randString(64);
+                    // [安全修复] 使用密码学安全的随机数生成器
+                    if (function_exists('random_bytes')) {
+                        $token = bin2hex(random_bytes(32)); // 生成 64 字符十六进制字符串
+                    } elseif (function_exists('openssl_random_pseudo_bytes')) {
+                        $strong = false;
+                        $bytes = openssl_random_pseudo_bytes(32, $strong);
+                        if ($strong) {
+                            $token = bin2hex($bytes);
+                        } else {
+                            throw new Typecho_Exception(_t('服务器随机数生成器不安全，无法生成令牌。请联系管理员。'));
+                        }
+                    } else {
+                        throw new Typecho_Exception(_t('服务器不支持安全随机数生成，请升级 PHP 至 7.0+ 或启用 openssl 扩展。'));
+                    }
                     $createdAt = $this->options->gmtTime;
                     $signature = $this->generateSignature($token, $user['uid'], $createdAt);
 
@@ -292,10 +305,12 @@ private function _setNotice($message, $type)
                     return;
                 }
 
-                // [安全] 步骤3: 新增密码复杂度验证
-                if (($complexityError = $this->validatePasswordComplexity($this->request->password)) !== true) {
-                    $this->_setNotice($complexityError, 'error');
-                    return;
+                // [安全] 步骤3: 密码复杂度验证（可配置）
+                if (!empty($this->config->enablePasswordComplexity) && $this->config->enablePasswordComplexity == '1') {
+                    if (($complexityError = $this->validatePasswordComplexity($this->request->password)) !== true) {
+                        $this->_setNotice($complexityError, 'error');
+                        return;
+                    }
                 }
 
                 // 步骤4: 人机验证 (CAPTCHA)
@@ -414,13 +429,25 @@ private function _setNotice($message, $type)
     }
 
     /**
-     * 清理过期或已使用的令牌
+     * 清理过期或已使用的令牌，以及过期的失败日志
+     *
+     * [优化] 添加日志表自动清理机制，防止表膨胀
      */
     private function cleanTokens()
     {
-        $expireTime = $this->options->gmtTime - 3600; // 1小时前
+        $now = $this->options->gmtTime;
+
+        // 清理过期的密码重置令牌（1小时前）
+        $tokenExpireTime = $now - 3600;
         $this->db->query($this->db->delete('table.password_reset_tokens')
-            ->where('created_at < ? OR used = ?', $expireTime, 1));
+            ->where('created_at < ? OR used = ?', $tokenExpireTime, 1));
+
+        // [新增] 清理过期的失败日志（30天前）
+        // 只保留最近30天的日志，防止表膨胀
+        $logExpireTime = $now - (30 * 24 * 3600); // 30天前
+        $prefix = $this->db->getPrefix();
+        $this->db->query($this->db->delete($prefix . 'passport_fails')
+            ->where('last_attempt < ? AND locked_until < ?', $logExpireTime, $now));
     }
 
     /**
@@ -460,7 +487,8 @@ private function _setNotice($message, $type)
             "lot_number" => $lot_number, "captcha_output" => $captcha_output,
             "pass_token" => $pass_token, "gen_time" => $gen_time, "sign_token" => $sign_token,
         ];
-        $url = 'http://gcaptcha4.geetest.com/validate?captcha_id=' . $captcha_id;
+        // [安全修复] 使用 HTTPS 防止中间人攻击
+        $url = 'https://gcaptcha4.geetest.com/validate?captcha_id=' . $captcha_id;
         $geetest_json_result = $this->send_post($url, $post_data);
         if ($geetest_json_result === false) {
             error_log('Passport: request geetest api fail');
@@ -491,9 +519,15 @@ private function _setNotice($message, $type)
             $mail->setFrom($this->config->username, $this->options->title);
             $mail->addAddress($user['mail'], $user['name']);
 
+            // [安全修复] 对所有插入邮件模板的变量进行 HTML 转义，防止 XSS
             $emailBody = str_replace(
                 ['{username}', '{sitename}', '{requestTime}', '{resetLink}'],
-                [$user['name'], Helper::options()->title, date('Y-m-d H:i:s'), $url],
+                [
+                    htmlspecialchars($user['name'], ENT_QUOTES, 'UTF-8'),
+                    htmlspecialchars(Helper::options()->title, ENT_QUOTES, 'UTF-8'),
+                    htmlspecialchars(date('Y-m-d H:i:s'), ENT_QUOTES, 'UTF-8'),
+                    htmlspecialchars($url, ENT_QUOTES, 'UTF-8')
+                ],
                 $this->config->emailTemplate
             );
 

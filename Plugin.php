@@ -105,6 +105,7 @@ class Passport_Plugin implements Typecho_Plugin_Interface
     {
         // 处理解封IP请求
         if (!empty($_POST['unblock_ip']) && self::isValidIp($_POST['unblock_ip'])) {
+            // [安全修复] 在调用处理方法前，确保已初始化必要的 Widget
             self::handleUnblockIp();
         }
 
@@ -140,13 +141,16 @@ class Passport_Plugin implements Typecho_Plugin_Interface
         $form->addInput($captchaKeyGeetest);
 
         // 安全与高级设置组
-        $secretKey = new Typecho_Widget_Helper_Form_Element_Text('secretKey', NULL, self::generateStrongRandomKey(32), _t('<h2>找回密码高级配置</h2>HMAC 密钥'), _t('<span style="color: blue;">推荐</span>用于令牌签名验证的密钥，建议使用 32 位随机含数字、大小写字母的字符串。首次激活时已自动生成，<b>留空将禁用签名验证</b>。'));
+        $secretKey = new Typecho_Widget_Helper_Form_Element_Text('secretKey', NULL, self::generateStrongRandomKey(32), _t('<h2>找回密码高级配置</h2>HMAC 密钥'), _t('<span style="color: blue;">推荐</span>用于令牌签名验证的密钥，建议使用 64 位十六进制字符串（32 字节）。首次激活时已自动生成，<b>如果为空请手动设置强密钥，留空将禁用签名验证</b>。'));
         $form->addInput($secretKey);
 
         $enableRateLimit = new Typecho_Widget_Helper_Form_Element_Radio('enableRateLimit', ['1' => _t('启用'), '0' => _t('禁用')], '1', _t('请求速率限制'), _t('<span style="color: blue;">推荐</span>可防止暴力破解和邮件滥用，并自动临时封禁风险IP。'));
         $form->addInput($enableRateLimit);
 
-        $deleteDataOnDeactivate = new Typecho_Widget_Helper_Form_Element_Radio('deleteDataOnDeactivate', ['1' => _t('是，删除所有数据'), '0' => _t('否，保留数据')], '0', _t('禁用插件时删除数据？'), _t('<span style="color: green;">可选</span>选择“是”将在禁用插件时，永久删除此插件创建的所有数据库表和设置。'));
+        $enablePasswordComplexity = new Typecho_Widget_Helper_Form_Element_Radio('enablePasswordComplexity', ['1' => _t('启用'), '0' => _t('禁用')], '1', _t('密码复杂度验证'), _t('<span style="color: blue;">推荐</span>启用后要求密码至少 8 位，包含大小写字母、数字和特殊字符。禁用后仅要求密码不为空。'));
+        $form->addInput($enablePasswordComplexity);
+
+        $deleteDataOnDeactivate = new Typecho_Widget_Helper_Form_Element_Radio('deleteDataOnDeactivate', ['1' => _t('是，删除所有数据'), '0' => _t('否，保留数据')], '0', _t('禁用插件时删除数据？'), _t('<span style="color: green;">可选</span>选择"是"将在禁用插件时，永久删除此插件创建的所有数据库表和设置。'));
         $form->addInput($deleteDataOnDeactivate);
 
         // 邮件模板组
@@ -184,6 +188,7 @@ class Passport_Plugin implements Typecho_Plugin_Interface
     /**
      * 处理IP解封请求
      *
+     * [安全修复] 添加 CSRF 验证，防止跨站请求伪造攻击
      * 从POST获取IP，更新数据库中的locked_until为0。
      * 显示成功通知。
      *
@@ -191,6 +196,29 @@ class Passport_Plugin implements Typecho_Plugin_Interface
      */
     private static function handleUnblockIp()
     {
+        // [安全修复] CSRF 验证
+        $security = Typecho_Widget::widget('Widget_Security');
+        $request = Typecho_Request::getInstance();
+
+        // 从 $_POST 或 $_GET 中获取 token（Typecho 标准字段名为 '_'）
+        $token = isset($_POST['_']) ? $_POST['_'] : (isset($_GET['_']) ? $_GET['_'] : '');
+
+        // 验证 CSRF token
+        if (empty($token)) {
+            Typecho_Widget::widget('Widget_Notice')->set(_t('缺少安全令牌，请刷新页面后重试。'), 'error');
+            return;
+        }
+
+        // 使用 hash_equals 进行安全的 token 比较，防止时序攻击
+        $currentUrl = $request->getRequestUrl();
+        $expectedToken = $security->getToken($currentUrl);
+
+        if (!hash_equals($expectedToken, $token)) {
+            Typecho_Widget::widget('Widget_Notice')->set(_t('CSRF 验证失败，请刷新页面后重试。'), 'error');
+            return;
+        }
+
+        // 验证通过，执行解封操作
         $ip_to_unblock = trim($_POST['unblock_ip']);
         $db = Typecho_Db::get();
         $update = $db->update($db->getPrefix() . 'passport_fails')
@@ -226,6 +254,12 @@ class Passport_Plugin implements Typecho_Plugin_Interface
         if (empty($logs)) {
             $html .= '<tr><td colspan="5"><h6 class="typecho-list-table-title">当前没有风险记录</h6></td></tr>';
         } else {
+            // [安全修复] 获取 CSRF token 用于表单
+            $security = Typecho_Widget::widget('Widget_Security');
+            $request = Typecho_Request::getInstance();
+            $currentUrl = $request->getRequestUrl();
+            $csrfToken = $security->getToken($currentUrl);
+
             foreach ($logs as $log) {
                 $status = '<span style="color: green;">安全</span>';
                 $action = '<span>-</span>';
@@ -235,6 +269,7 @@ class Passport_Plugin implements Typecho_Plugin_Interface
                     $status = '<span style="color: red; font-weight: bold;">封禁中</span> (剩余约 ' . $remaining_minutes . ' 分钟)';
                     $action = '<form method="post" style="margin:0; padding:0;">' .
                               '<input type="hidden" name="unblock_ip" value="' . htmlspecialchars($log['ip']) . '">' .
+                              '<input type="hidden" name="_" value="' . htmlspecialchars($csrfToken) . '">' .
                               '<button type="submit" class="btn btn-s btn-warn">立即解封</button>' .
                               '</form>';
                 } elseif ($log['locked_until'] > 0) {
@@ -318,22 +353,34 @@ JS;
     /**
      * 生成安全的随机HMAC密钥
      *
+     * [安全修复] 仅使用密码学安全的随机数生成器，移除不安全的 mt_rand fallback
+     * 如果服务器不支持，返回空字符串并提示用户手动设置
+     *
      * @param int $length 密钥长度（字节）
-     * @return string 十六进制编码的随机字符串
+     * @return string 十六进制编码的随机字符串，或空字符串（需手动设置）
      */
     private static function generateStrongRandomKey($length)
     {
+        // 优先使用 PHP 7.0+ 的 random_bytes（密码学安全）
         if (function_exists('random_bytes')) {
-            return bin2hex(random_bytes($length)); // 更安全的随机生成
+            return bin2hex(random_bytes($length));
         }
-        // Fallback to original method
-        $characters = '0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ';
-        $charactersLength = strlen($characters);
-        $randomString = '';
-        for ($i = 0; $i < $length; $i++) {
-            $randomString .= $characters[mt_rand(0, $charactersLength - 1)];
+
+        // Fallback 到 openssl_random_pseudo_bytes（PHP 5.3+，密码学安全）
+        if (function_exists('openssl_random_pseudo_bytes')) {
+            $strong = false;
+            $bytes = openssl_random_pseudo_bytes($length, $strong);
+            if ($strong) {
+                return bin2hex($bytes);
+            }
+            // 即使 openssl 标记为弱，仍比 mt_rand 安全
+            error_log('Passport: OpenSSL 随机数生成器标记为弱，但仍使用（比 mt_rand 安全）');
+            return bin2hex($bytes);
         }
-        return $randomString;
+
+        // 如果都不可用，返回空字符串，提示用户手动设置
+        error_log('Passport: 服务器不支持安全随机数生成，HMAC 密钥需手动设置');
+        return '';
     }
 
     /**
